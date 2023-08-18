@@ -5,7 +5,8 @@ all_sampledirs = [ x.name for x in pathlib.Path().iterdir() \
     if x.is_dir() and x.name.startswith("Sample_") ]
 all_sampledirs.sort()
 all_sampleids = [ re.sub(r'^Sample_', '', x) for x in all_sampledirs ]
-all_sampleids.remove('unknown')
+if 'unknown' in all_sampleids:
+  all_sampleids.remove('unknown')
 
 threads_max = 8
 
@@ -15,11 +16,13 @@ rule all:
     expand('Sample_{s}/genome_results.txt', s = all_sampleids),
     expand('Sample_{s}/{s}.dv.vcf.gz', s = all_sampleids),
     expand('Sample_{s}/{s}.dv.tsv', s = all_sampleids),
+    expand('Sample_{s}/{s}.pbsv.vcf', s = all_sampleids),
+    expand('Sample_{s}/{s}.pbsv.tsv', s = all_sampleids),
     "multiqc_report.html"
 
 rule minimap_align:
   input:
-    ref = 'ref/GRCh38.mmi',
+    ref = srcdir('ref/GRCh38.mmi'),
     ccs = 'Sample_{s}/20010E_PacBio_Pilot.{s}.consensusreadset.xml'
   output:
     aligned = 'Sample_{s}/{s}.ccs.aligned.bam',
@@ -86,7 +89,7 @@ rule vcfstats:
   log: "logs/{s}_vcfstats.log"
   shell:
     """
-    /mnt/share/opt/ngs-bits-2020_06-9-g409d0101/VariantQC -in {input} -out {output}
+    /mnt/storage1/share/opt/ngs-bits-2020_06-9-g409d0101/VariantQC -in {input} -out {output}
     """
 
 rule multiqc:
@@ -97,10 +100,10 @@ rule multiqc:
     "multiqc_report.html"
   threads: 1
   params:
-    conf = "config_multiqc.yml"
+    conf = srcdir("config_multiqc.yml")
   shell:
     """
-    /mnt/users/ahgrosc1/tools/bin/multiqc -f -c {params.conf} {input}
+    multiqc -f -c {params.conf} {input}
     """
 
 rule vcf2tsv:
@@ -111,4 +114,41 @@ rule vcf2tsv:
   shell:
     """
     bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%QUAL\t%FILTER\t[%GT\t%GQ\t%DP\t%AD\t%VAF\t%PL] \n'  {input} > {output}
+    """
+
+rule pbsv_discover:
+  input:
+   rules.minimap_align.output.aligned
+  output:
+   "Sample_{s}/{s}.svsig.gz"
+  conda:
+    "env.yaml"
+  shell:
+    """
+    pbsv discover {input} {output}
+    """
+
+rule pbsv:
+  input:
+    svsig = rules.pbsv_discover.output,
+    ref = srcdir("ref/GRCh38.fa")
+  output:
+    "Sample_{s}/{s}.pbsv.vcf"
+  conda:
+    "env.yaml"
+  shell:
+    """
+    pbsv call --ccs {input.ref} {input.svsig} {output}
+    """
+
+rule vcf2tsv_pbsv:
+  input:
+    rules.pbsv.output
+  output:
+   "Sample_{s}/{s}.pbsv.tsv"
+  conda:
+    "env.yaml"
+  shell:
+    """
+    bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%QUAL\t%FILTER\t[%GT\t%AD\t%DP\t%SAC\t%CN] \n'  {input} > {output}
     """
